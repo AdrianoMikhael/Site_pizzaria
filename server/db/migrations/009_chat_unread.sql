@@ -1,0 +1,5 @@
+ALTER TABLE chat_conversations
+  ADD COLUMN IF NOT EXISTS unread_for_customer BOOLEAN NOT NULL DEFAULT FALSE;
+
+ALTER TABLE chat_conversations
+  ADD COLUMN IF NOT EXISTS unread_for_admin BOOLEAN NOT NULL DEFAULT FALSE;
