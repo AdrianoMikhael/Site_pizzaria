@@ -57,10 +57,11 @@ function nextStatus(order: AdminOrder) {
 }
 
 function AdminAuth({ onAuthenticated }: { onAuthenticated: (user: AuthUser) => void }) {
-  const [mode, setMode] = useState<'login' | 'register'>('login')
+  const [mode, setMode] = useState<'login' | 'register' | 'forgot'>('login')
   const [sending, setSending] = useState(false)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
+  const [developmentResetUrl, setDevelopmentResetUrl] = useState<string | null>(null)
   const [pendingVerification, setPendingVerification] = useState<{ email: string; developmentVerificationUrl?: string } | null>(null)
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -71,12 +72,16 @@ function AdminAuth({ onAuthenticated }: { onAuthenticated: (user: AuthUser) => v
         const result = await api.login({ email: data.get('email'), password: data.get('password') })
         if (result.user.role !== 'admin') { await api.logout(); throw new Error('Esta conta não possui permissão administrativa.') }
         onAuthenticated(result.user)
-      } else {
+      } else if (mode === 'register') {
         const result = await api.register({
           role: 'admin', name: data.get('name'), email: data.get('email'), password: data.get('password'),
           returnTo: '/admin.html',
         })
         setPendingVerification({ email: result.email, developmentVerificationUrl: result.developmentVerificationUrl })
+      } else {
+        const result = await api.forgotPassword(String(data.get('email')))
+        setMessage(result.message)
+        setDevelopmentResetUrl(result.developmentResetUrl ?? null)
       }
     } catch (caught) { setError(caught instanceof Error ? caught.message : 'Não foi possível autenticar.') }
     finally { setSending(false) }
@@ -102,7 +107,43 @@ function AdminAuth({ onAuthenticated }: { onAuthenticated: (user: AuthUser) => v
     finally { setSending(false) }
   }
 
-  return <main className="admin-auth-page"><section className="admin-auth-card"><a className="admin-auth-brand" href="/"><span>B</span><div><strong>Brasa & Massa</strong><small>Painel administrativo</small></div></a><span className="admin-auth-icon"><LockKeyhole size={27} /></span><small>Área protegida</small>{pendingVerification ? <div className="admin-verification"><h1>Confirme seu e-mail</h1><p>Enviamos o link de ativação para <strong>{pendingVerification.email}</strong>.</p>{pendingVerification.developmentVerificationUrl && <a href={pendingVerification.developmentVerificationUrl}>Abrir confirmação local</a>}{message && <p className="admin-auth-success">{message}</p>}{error && <p className="admin-auth-error">{error}</p>}<button onClick={() => void resendVerification()} disabled={sending}>{sending ? <LoaderCircle className="spin" size={17} /> : null}Reenviar confirmação</button><button className="admin-text-button" onClick={() => { setPendingVerification(null); setMode('login') }}>Voltar ao login</button></div> : <><h1>{mode === 'login' ? 'Acessar o painel' : 'Primeiro administrador'}</h1><p>{mode === 'login' ? 'Entre com uma conta que tenha permissão administrativa.' : 'O primeiro cadastro é liberado sem código. Depois dele, novos cadastros administrativos ficam bloqueados.'}</p>{import.meta.env.DEV && mode === 'login' && <div className="demo-login-box"><strong>Conta temporária de administrador</strong><code>admin@pizzaria.local</code><code>PizzaAdmin123</code><button onClick={() => void enterDemoAdmin()} disabled={sending}>Entrar como admin de teste</button></div>}<div className="admin-auth-tabs"><button className={mode === 'login' ? 'is-active' : ''} onClick={() => { setMode('login'); setError('') }}>Entrar</button><button className={mode === 'register' ? 'is-active' : ''} onClick={() => { setMode('register'); setError('') }}>Primeiro cadastro</button></div><form onSubmit={submit}>{mode === 'register' && <label>Nome<input name="name" required minLength={2} /></label>}<label>E-mail<input name="email" type="email" required /></label><label>Senha<input name="password" type="password" required minLength={8} placeholder="Letra e número, mínimo 8 caracteres" /></label>{error && <p className="admin-auth-error">{error}</p>}<button disabled={sending}>{sending ? <LoaderCircle className="spin" size={17} /> : <LockKeyhole size={17} />}{mode === 'login' ? 'Entrar com segurança' : 'Criar primeiro administrador'}</button></form></>}<a className="admin-auth-back" href="/"><ArrowLeft size={15} />Voltar à loja</a></section></main>
+  return <main className="admin-auth-page">
+    <section className="admin-auth-card">
+      <a className="admin-auth-brand" href="/"><span>B</span><div><strong>Brasa & Massa</strong><small>Painel administrativo</small></div></a>
+      <span className="admin-auth-icon"><LockKeyhole size={27} /></span><small>Área protegida</small>
+      {pendingVerification ? <div className="admin-verification">
+        <h1>Confirme seu e-mail</h1><p>Enviamos o link de ativação para <strong>{pendingVerification.email}</strong>.</p>
+        {pendingVerification.developmentVerificationUrl && <a href={pendingVerification.developmentVerificationUrl}>Abrir confirmação local</a>}
+        {message && <p className="admin-auth-success">{message}</p>}{error && <p className="admin-auth-error">{error}</p>}
+        <button onClick={() => void resendVerification()} disabled={sending}>{sending ? <LoaderCircle className="spin" size={17} /> : null}Reenviar confirmação</button>
+        <button className="admin-text-button" onClick={() => { setPendingVerification(null); setMode('login') }}>Voltar ao login</button>
+      </div> : <>
+        <h1>{mode === 'login' ? 'Acessar o painel' : mode === 'register' ? 'Primeiro administrador' : 'Recuperar senha'}</h1>
+        <p>{mode === 'login'
+          ? 'Entre com uma conta que tenha permissão administrativa.'
+          : mode === 'register'
+            ? 'O primeiro cadastro é liberado sem código. Depois dele, novos cadastros administrativos ficam bloqueados.'
+            : 'Informe seu e-mail. Se a conta existir, enviaremos um link de uso único para criar uma nova senha.'}</p>
+        {import.meta.env.DEV && mode === 'login' && <div className="demo-login-box"><strong>Conta temporária de administrador</strong><code>admin@pizzaria.local</code><code>PizzaAdmin123</code><button onClick={() => void enterDemoAdmin()} disabled={sending}>Entrar como admin de teste</button></div>}
+        {mode !== 'forgot' && <div className="admin-auth-tabs">
+          <button className={mode === 'login' ? 'is-active' : ''} onClick={() => { setMode('login'); setError(''); setMessage('') }}>Entrar</button>
+          <button className={mode === 'register' ? 'is-active' : ''} onClick={() => { setMode('register'); setError(''); setMessage('') }}>Primeiro cadastro</button>
+        </div>}
+        <form onSubmit={submit}>
+          {mode === 'register' && <label>Nome<input name="name" required minLength={2} /></label>}
+          <label>E-mail<input name="email" type="email" required /></label>
+          {mode !== 'forgot' && <label>Senha<input name="password" type="password" required minLength={8} placeholder="Letra e número, mínimo 8 caracteres" /></label>}
+          {message && <p className="admin-auth-success">{message}</p>}
+          {developmentResetUrl && <a className="admin-local-reset" href={developmentResetUrl}>Abrir recuperação local</a>}
+          {error && <p className="admin-auth-error">{error}</p>}
+          <button disabled={sending}>{sending ? <LoaderCircle className="spin" size={17} /> : <LockKeyhole size={17} />}{mode === 'login' ? 'Entrar com segurança' : mode === 'register' ? 'Criar primeiro administrador' : 'Enviar link de recuperação'}</button>
+          {mode === 'login' && <button type="button" className="admin-forgot-button" onClick={() => { setMode('forgot'); setError(''); setMessage(''); setDevelopmentResetUrl(null) }}>Esqueci minha senha</button>}
+          {mode === 'forgot' && <button type="button" className="admin-forgot-button" onClick={() => { setMode('login'); setError(''); setMessage(''); setDevelopmentResetUrl(null) }}>Voltar ao login</button>}
+        </form>
+      </>}
+      <a className="admin-auth-back" href="/"><ArrowLeft size={15} />Voltar à loja</a>
+    </section>
+  </main>
 }
 
 export default function AdminApp() {

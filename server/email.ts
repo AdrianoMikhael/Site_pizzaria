@@ -18,6 +18,14 @@ type OrderStatusEmail = {
   from: string
 }
 
+type PasswordResetEmail = {
+  to: string
+  name: string
+  resetUrl: string
+  apiKey?: string
+  from: string
+}
+
 const escapeHtml = (value: string) => value
   .replaceAll('&', '&amp;')
   .replaceAll('<', '&lt;')
@@ -55,6 +63,39 @@ export async function sendVerificationEmail(input: VerificationEmail) {
   if (!response.ok) {
     const details = await response.text()
     throw new Error(`Falha ao enviar e-mail de confirmação (${response.status}): ${details}`)
+  }
+  return { delivery: 'sent' as const }
+}
+
+export async function sendPasswordResetEmail(input: PasswordResetEmail) {
+  if (!input.apiKey) return { delivery: 'development' as const }
+
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${input.apiKey}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      from: input.from,
+      to: [input.to],
+      subject: 'Redefina sua senha — Brasa & Massa',
+      html: `
+        <div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;color:#2c231b">
+          <h1 style="color:#b93227">Brasa &amp; Massa</h1>
+          <p>Olá, ${escapeHtml(input.name)}.</p>
+          <p>Recebemos uma solicitação para redefinir a senha da sua conta.</p>
+          <p style="margin:28px 0">
+            <a href="${escapeHtml(input.resetUrl)}" style="background:#b93227;color:white;padding:13px 20px;border-radius:8px;text-decoration:none;font-weight:bold">Criar nova senha</a>
+          </p>
+          <p style="font-size:13px;color:#756b62">Este link expira em 1 hora. Se você não solicitou a alteração, ignore esta mensagem.</p>
+        </div>`,
+    }),
+  })
+
+  if (!response.ok) {
+    const details = await response.text()
+    throw new Error(`Falha ao enviar recuperação de senha (${response.status}): ${details}`)
   }
   return { delivery: 'sent' as const }
 }

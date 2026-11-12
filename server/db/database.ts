@@ -13,6 +13,7 @@ const migrationUrls = [
   new URL('./migrations/007_admin_orders_inventory_schedule.sql', import.meta.url),
   new URL('./migrations/008_customer_inventory_notifications.sql', import.meta.url),
   new URL('./migrations/009_chat_unread.sql', import.meta.url),
+  new URL('./migrations/010_password_reset.sql', import.meta.url),
 ]
 
 export async function createDatabase(path?: string) {

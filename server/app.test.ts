@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import { buildApp } from './app.js'
 import { createDatabase } from './db/database.js'
@@ -7,14 +7,15 @@ const apps: FastifyInstance[] = []
 
 afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.close()))
+  vi.restoreAllMocks()
 })
 
-async function testApp() {
+async function testApp(options: { resendApiKey?: string } = {}) {
   const database = await createDatabase()
   await database.query("UPDATE store_settings SET value = jsonb_set(value, '{status}', '\"open\"'::jsonb) WHERE key = 'operation'")
   const app = await buildApp({
     database, adminApiKey: 'test-admin-key',
-    webPublicUrl: 'http://127.0.0.1:5173', resendApiKey: '',
+    webPublicUrl: 'http://127.0.0.1:5173', resendApiKey: options.resendApiKey ?? '',
   })
   apps.push(app)
   return app
@@ -107,6 +108,70 @@ describe('API da pizzaria', () => {
     expect(logout.statusCode).toBe(204)
     const afterLogout = await app.inject({ method: 'GET', url: '/api/auth/me', headers: { cookie } })
     expect(afterLogout.statusCode).toBe(401)
+  })
+
+  it('mantém o cadastro utilizável quando o serviço de e-mail recusa o envio local', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(
+      JSON.stringify({ message: 'O remetente de teste não pode enviar para este destinatário.' }),
+      { status: 403, headers: { 'content-type': 'application/json' } },
+    ))
+    const app = await testApp({ resendApiKey: 're_chave_de_teste' })
+    const registered = await app.inject({
+      method: 'POST', url: '/api/auth/register',
+      payload: {
+        role: 'customer', name: 'Cliente sem e-mail', email: 'sem-entrega@exemplo.com',
+        phone: '82977776666', password: 'Pizza1234',
+      },
+    })
+    expect(registered.statusCode).toBe(201)
+    expect(registered.json()).toMatchObject({
+      requiresEmailVerification: true,
+      emailDelivery: 'failed',
+      developmentVerificationUrl: expect.stringContaining('/confirmar-email.html?token='),
+    })
+  })
+
+  it('recupera a senha por link de uso único e encerra sessões anteriores', async () => {
+    const app = await testApp()
+    await confirmRegistration(app, {
+      role: 'customer', name: 'Cliente Recuperação', email: 'recuperacao@exemplo.com',
+      phone: '82955554444', password: 'SenhaAntiga1',
+    })
+    const forgot = await app.inject({
+      method: 'POST', url: '/api/auth/forgot-password', payload: { email: 'recuperacao@exemplo.com' },
+    })
+    expect(forgot.statusCode).toBe(202)
+    expect(forgot.json().developmentResetUrl).toContain('/redefinir-senha.html?token=')
+    const token = new URL(forgot.json().developmentResetUrl).searchParams.get('token')
+
+    const reset = await app.inject({
+      method: 'POST', url: '/api/auth/reset-password', payload: { token, password: 'SenhaNova123' },
+    })
+    expect(reset.statusCode).toBe(200)
+    expect(reset.headers['set-cookie']).toContain('HttpOnly')
+    expect(reset.json()).toMatchObject({ redirectTo: '/', message: 'Senha atualizada com segurança.' })
+
+    const oldPassword = await app.inject({
+      method: 'POST', url: '/api/auth/login',
+      payload: { email: 'recuperacao@exemplo.com', password: 'SenhaAntiga1' },
+    })
+    expect(oldPassword.statusCode).toBe(401)
+    const newPassword = await app.inject({
+      method: 'POST', url: '/api/auth/login',
+      payload: { email: 'recuperacao@exemplo.com', password: 'SenhaNova123' },
+    })
+    expect(newPassword.statusCode).toBe(200)
+
+    const reused = await app.inject({
+      method: 'POST', url: '/api/auth/reset-password', payload: { token, password: 'OutraSenha123' },
+    })
+    expect(reused.statusCode).toBe(400)
+    const unknown = await app.inject({
+      method: 'POST', url: '/api/auth/forgot-password', payload: { email: 'nao-existe@exemplo.com' },
+    })
+    expect(unknown.statusCode).toBe(202)
+    expect(unknown.json().developmentResetUrl).toBeUndefined()
   })
 
   it('exige confirmação de e-mail antes do primeiro login e permite reenviar o link', async () => {

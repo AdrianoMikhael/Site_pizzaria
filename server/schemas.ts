@@ -60,6 +60,15 @@ export const verifyEmailSchema = z.object({
   token: z.string().min(32).max(200),
 })
 
+export const forgotPasswordSchema = z.object({
+  email: z.string().trim().email().max(160),
+})
+
+export const resetPasswordSchema = z.object({
+  token: z.string().min(32).max(200),
+  password: passwordSchema,
+})
+
 export const profileUpdateSchema = z.object({
   name: z.string().trim().min(2).max(100).optional(),
   phone: z.string().trim().min(10).max(20).nullable().optional(),

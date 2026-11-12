@@ -9,15 +9,15 @@ import {
 } from './auth.js'
 import { config } from './config.js'
 import { createDatabase, type Database } from './db/database.js'
-import { sendOrderStatusEmail, sendVerificationEmail } from './email.js'
+import { sendOrderStatusEmail, sendPasswordResetEmail, sendVerificationEmail } from './email.js'
 import { ApiError } from './errors.js'
 import {
   categoryInputSchema, categoryUpdateSchema, createOrderSchema, orderStatusSchema,
   chatConversationSchema, chatMessageSchema, chatStatusSchema, deliveryQuoteSchema,
   deliveryReviewSchema, deliveryZoneInputSchema, deliveryZoneUpdateSchema,
   customizationAvailabilitySchema, ingredientInputSchema, ingredientUpdateSchema,
-  loginSchema, paymentStatusSchema, productInputSchema, productUpdateSchema, profileUpdateSchema,
-  registerSchema, resendVerificationSchema, savedAddressSchema, storeSettingsSchema, verifyEmailSchema,
+  forgotPasswordSchema, loginSchema, paymentStatusSchema, productInputSchema, productUpdateSchema, profileUpdateSchema,
+  registerSchema, resendVerificationSchema, resetPasswordSchema, savedAddressSchema, storeSettingsSchema, verifyEmailSchema,
 } from './schemas.js'
 
 type BuildAppOptions = {
@@ -175,6 +175,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   const resendApiKey = options.resendApiKey ?? config.resendApiKey
   const emailFrom = options.emailFrom ?? config.emailFrom
   const loginAttempts = new Map<string, { count: number; resetAt: number }>()
+  const passwordResetAttempts = new Map<string, { count: number; resetAt: number }>()
   const customerChatStreams = new Map<string, Set<ServerResponse>>()
   const adminChatStreams = new Set<ServerResponse>()
 
@@ -215,11 +216,41 @@ export async function buildApp(options: BuildAppOptions = {}) {
       )
     })
     const verificationUrl = `${webPublicUrl.replace(/\/$/, '')}/confirmar-email.html?token=${encodeURIComponent(token)}`
-    const result = await sendVerificationEmail({
-      to: user.email, name: user.name, role: user.role, verificationUrl,
-      apiKey: resendApiKey, from: emailFrom,
+    try {
+      const result = await sendVerificationEmail({
+        to: user.email, name: user.name, role: user.role, verificationUrl,
+        apiKey: resendApiKey, from: emailFrom,
+      })
+      return { verificationUrl, delivery: result.delivery, error: null }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Falha desconhecida no serviço de e-mail.'
+      if (!config.isProduction) console.error('[E-mail] Confirmação não enviada:', message)
+      return { verificationUrl, delivery: 'failed' as const, error: message }
+    }
+  }
+
+  async function issuePasswordReset(user: { id: string; name: string; email: string }) {
+    const token = randomBytes(32).toString('hex')
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000)
+    await database.transaction(async (transaction) => {
+      await transaction.query('DELETE FROM password_reset_tokens WHERE user_id = $1 AND used_at IS NULL', [user.id])
+      await transaction.query(
+        `INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at)
+         VALUES ($1, $2, $3, $4)`,
+        [randomUUID(), user.id, hashToken(token), expiresAt.toISOString()],
+      )
     })
-    return { verificationUrl, delivery: result.delivery }
+    const resetUrl = `${webPublicUrl.replace(/\/$/, '')}/redefinir-senha.html?token=${encodeURIComponent(token)}`
+    try {
+      const result = await sendPasswordResetEmail({
+        to: user.email, name: user.name, resetUrl, apiKey: resendApiKey, from: emailFrom,
+      })
+      return { resetUrl, delivery: result.delivery, error: null }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Falha desconhecida no serviço de e-mail.'
+      if (!config.isProduction) console.error('[E-mail] Recuperação não enviada:', message)
+      return { resetUrl, delivery: 'failed' as const, error: message }
+    }
   }
 
   async function consumeEmailVerification(token: string) {
@@ -463,8 +494,13 @@ export async function buildApp(options: BuildAppOptions = {}) {
     return reply.status(201).send({
       requiresEmailVerification: true,
       email,
-      message: 'Cadastro criado. Abra o link enviado ao seu e-mail para ativar a conta.',
-      ...(!config.isProduction && verification.delivery === 'development'
+      emailDelivery: verification.delivery,
+      message: verification.delivery === 'sent'
+        ? 'Cadastro criado. Abra o link enviado ao seu e-mail para ativar a conta.'
+        : !config.isProduction
+          ? 'Cadastro criado. O serviço de e-mail não entregou a mensagem; use o link local abaixo para continuar o teste.'
+          : 'Cadastro criado, mas o e-mail não pôde ser enviado agora. Use a opção de reenviar a confirmação.',
+      ...(!config.isProduction && verification.delivery !== 'sent'
         ? { developmentVerificationUrl: verification.verificationUrl }
         : {}),
     })
@@ -485,7 +521,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     let developmentVerificationUrl: string | undefined
     if (user) {
       const verification = await issueEmailVerification(user, user.return_path ?? undefined)
-      if (!config.isProduction && verification.delivery === 'development') developmentVerificationUrl = verification.verificationUrl
+      if (!config.isProduction && verification.delivery !== 'sent') developmentVerificationUrl = verification.verificationUrl
     }
     return reply.status(202).send({
       message: 'Se houver uma conta pendente com este e-mail, um novo link foi gerado.',
@@ -513,6 +549,67 @@ export async function buildApp(options: BuildAppOptions = {}) {
       const invalidUrl = new URL('/', webPublicUrl)
       invalidUrl.searchParams.set('email_error', 'invalid_or_expired')
       return reply.redirect(invalidUrl.toString())
+    }
+  })
+
+  app.post('/api/auth/forgot-password', async (request, reply) => {
+    const input = forgotPasswordSchema.parse(request.body)
+    const email = normalizeEmail(input.email)
+    const attemptKey = `${request.ip}:${email}`
+    const previous = passwordResetAttempts.get(attemptKey)
+    const current = previous && previous.resetAt > Date.now()
+      ? previous
+      : { count: 0, resetAt: Date.now() + 15 * 60 * 1000 }
+    if (current.count >= 5) throw new ApiError(429, 'Muitas solicitações. Aguarde 15 minutos e tente novamente.')
+    passwordResetAttempts.set(attemptKey, { ...current, count: current.count + 1 })
+
+    const result = await database.query(
+      `SELECT id, name, email FROM users
+       WHERE LOWER(email) = $1 AND active = TRUE AND email_verified_at IS NOT NULL`,
+      [email],
+    )
+    const user = result.rows[0] as { id: string; name: string; email: string } | undefined
+    let developmentResetUrl: string | undefined
+    if (user) {
+      const reset = await issuePasswordReset(user)
+      if (!config.isProduction && reset.delivery !== 'sent') developmentResetUrl = reset.resetUrl
+    }
+    return reply.status(202).send({
+      message: 'Se existir uma conta ativa com este e-mail, enviaremos um link para criar uma nova senha.',
+      ...(developmentResetUrl ? { developmentResetUrl } : {}),
+    })
+  })
+
+  app.post('/api/auth/reset-password', async (request, reply) => {
+    const input = resetPasswordSchema.parse(request.body)
+    const result = await database.query(
+      `SELECT t.id AS token_id, t.user_id, u.role
+       FROM password_reset_tokens t
+       JOIN users u ON u.id = t.user_id
+       WHERE t.token_hash = $1 AND t.used_at IS NULL AND t.expires_at > CURRENT_TIMESTAMP
+         AND u.active = TRUE AND u.email_verified_at IS NOT NULL`,
+      [hashToken(input.token)],
+    )
+    const row = result.rows[0] as { token_id: string; user_id: string; role: 'customer' | 'admin' } | undefined
+    if (!row) throw new ApiError(400, 'Este link de recuperação é inválido, já foi usado ou expirou.')
+
+    const password = await hashPassword(input.password)
+    await database.transaction(async (transaction) => {
+      await transaction.query(
+        `UPDATE users SET password_hash = $2, password_salt = $3, updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1`,
+        [row.user_id, password.hash, password.salt],
+      )
+      await transaction.query(
+        'UPDATE password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE user_id = $1 AND used_at IS NULL', [row.user_id],
+      )
+      await transaction.query('DELETE FROM auth_sessions WHERE user_id = $1', [row.user_id])
+    })
+    const sessionToken = await createSession(database, row.user_id, sessionDays)
+    reply.header('set-cookie', sessionCookie(sessionToken, sessionDays, config.isProduction))
+    return {
+      message: 'Senha atualizada com segurança.',
+      redirectTo: row.role === 'admin' ? '/admin.html' : '/',
     }
   })
 

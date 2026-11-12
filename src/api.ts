@@ -55,6 +55,7 @@ export type RegistrationResult = {
   requiresEmailVerification: true
   email: string
   message: string
+  emailDelivery?: 'sent' | 'development' | 'failed'
   developmentVerificationUrl?: string
 }
 
@@ -310,6 +311,12 @@ export const api = {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email }),
   }),
   verifyEmail: verifyEmailWithTimeout,
+  forgotPassword: (email: string) => request<{ message: string; developmentResetUrl?: string }>('/api/auth/forgot-password', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email }),
+  }),
+  resetPassword: (token: string, password: string) => request<{ message: string; redirectTo: string }>('/api/auth/reset-password', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token, password }),
+  }),
   login: (payload: unknown) => request<{ user: AuthUser }>('/api/auth/login', {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
   }),

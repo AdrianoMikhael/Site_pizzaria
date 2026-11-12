@@ -18,6 +18,7 @@ export default defineConfig({
         admin: `${root}admin.html`,
         tracking: `${root}acompanhar.html`,
         verifyEmail: `${root}confirmar-email.html`,
+        resetPassword: `${root}redefinir-senha.html`,
       },
     },
   },

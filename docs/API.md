@@ -59,6 +59,8 @@ também são calculados no servidor, impedindo alteração de valores pelo naveg
 | `POST` | `/api/auth/register` | Cadastra cliente ou o primeiro administrador |
 | `POST` | `/api/auth/verify-email` | Confirma o token, cria a primeira sessão e devolve o caminho de retorno |
 | `POST` | `/api/auth/resend-verification` | Gera e envia um novo link de confirmação |
+| `POST` | `/api/auth/forgot-password` | Solicita um link de recuperação sem revelar se a conta existe |
+| `POST` | `/api/auth/reset-password` | Troca a senha com um token válido de uso único |
 | `POST` | `/api/auth/login` | Cria uma sessão segura |
 | `POST` | `/api/auth/logout` | Encerra a sessão atual |
 | `GET` | `/api/auth/me` | Retorna o usuário autenticado e suas preferências |
@@ -77,6 +79,14 @@ endereço está ou não cadastrado.
 O e-mail abre `confirmar-email.html`, que confirma o token sem deixar o usuário preso na API e
 redireciona automaticamente para o caminho e a seção em que o cadastro começou. A rota `GET`
 antiga permanece disponível apenas para links já enviados.
+
+Em “Esqueci minha senha”, a API sempre devolve a mesma resposta pública, exista ou não uma conta
+com aquele e-mail. Para uma conta ativa e confirmada, o link de recuperação vale por uma hora e
+só pode ser usado uma vez. Ao trocar a senha, todas as sessões anteriores são encerradas e uma nova
+sessão é criada. No desenvolvimento, uma falha da Resend também libera um link local para teste.
+
+O remetente `onboarding@resend.dev` serve apenas para testes limitados. O envio real para os
+clientes exige um domínio validado na Resend e um `EMAIL_FROM` pertencente a esse domínio.
 
 O primeiro administrador pode se cadastrar sem código somente enquanto não existe nenhum usuário
 com função `admin`. Depois disso, o cadastro administrativo público é bloqueado. Em produção, o
@@ -130,6 +140,7 @@ posterior a `to`.
 - Senhas protegidas com `scrypt` e salt exclusivo.
 - Sessões com tokens aleatórios, hash no banco e cookies `HttpOnly`.
 - Confirmação obrigatória do e-mail com token aleatório, hash no banco e expiração.
+- Recuperação de senha com resposta neutra, token de uso único, hash no banco e expiração.
 - Somente o primeiro cadastro administrativo é público; os seguintes são bloqueados.
 - Limite temporário de tentativas de login por IP e e-mail.
 - Histórico de cada mudança operacional.

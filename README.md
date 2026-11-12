@@ -25,6 +25,11 @@ No ambiente local, a tela mostra o link de confirmação para facilitar os teste
 copie `.env.example` para `.env` e configure `RESEND_API_KEY`, `EMAIL_FROM` e `WEB_PUBLIC_URL`.
 Em produção, a API não inicia sem a URL pública do site e a chave do serviço de e-mail.
 
+O remetente de teste `onboarding@resend.dev` da Resend é limitado. Para enviar e-mails a qualquer
+cliente em produção, valide um domínio na Resend e troque `EMAIL_FROM` por um endereço desse domínio.
+Se o provedor recusar o envio durante o desenvolvimento, o cadastro continua salvo e o site exibe
+um link local para confirmar a conta ou redefinir a senha sem travar os testes.
+
 ## Verificações
 
 ```bash
@@ -61,6 +66,8 @@ A lista de rotas e exemplos está em [`docs/API.md`](docs/API.md).
 - [x] Sessões persistentes em cookie HttpOnly e permissões por função
 - [x] Preferências, endereço e histórico recente salvos na conta do cliente
 - [x] Confirmação de e-mail por link com validade de 24 horas e opção de reenvio
+- [x] Recuperação de senha por e-mail com link de uso único e validade de 1 hora
+- [x] Falha de envio de e-mail tratada sem derrubar o cadastro ou a API
 - [x] Primeiro administrador sem código e bloqueio de novos cadastros públicos
 - [ ] Migrar o PostgreSQL local para Supabase
 - [ ] Publicar o site no Cloudflare
